@@ -89,9 +89,15 @@ code{background:#0d1116;border:1px solid #232a32;border-radius:5px;padding:1px 4
 
     <details>
       <summary>Cruzar com o grupo do WhatsApp</summary>
-      <p>Cole aqui os números do grupo — um por linha, com ou sem formatação. Eles ficam
-      <strong>só neste navegador</strong>, nunca vão para o servidor. Quem se inscrever com um número
-      fora dessa lista aparece marcado como <span class="chip fora">fora do grupo</span>.</p>
+      <p>Os números ficam <strong>só neste navegador</strong>, nunca vão para o servidor. Quem se
+      inscrever com um número fora da lista aparece marcado como <span class="chip fora">fora do grupo</span>.</p>
+      <p><strong>Atenção:</strong> o cruzamento entende o formato brasileiro, com ou sem o 55 e com ou
+      sem o 9 do celular. Um número estrangeiro só casa se a pessoa digitar o código do país — sem ele,
+      aparece como fora do grupo mesmo sendo membro. Trate o selo como pista, não como veredito.</p>
+      <p>O jeito rápido: exporte os participantes do grupo em CSV e solte o arquivo aqui.
+      Ele é lido dentro do navegador — <strong>não é enviado a lugar nenhum</strong>.</p>
+      <input type="file" id="arquivo-csv" accept=".csv,text/csv">
+      <p style="margin-top:12px">Ou cole os números, um por linha:</p>
       <textarea id="numeros" rows="4" placeholder="+55 31 97777-6666&#10;5511988887777"></textarea>
       <div class="barra" style="margin-top:10px">
         <button id="salvar-numeros">Salvar lista</button>
@@ -125,6 +131,52 @@ const chaveTelefone = (valor) => {
   if (digitos.length === 11 && digitos[2] === "9") digitos = digitos.slice(0, 2) + digitos.slice(3);
   return digitos.length >= 10 ? digitos.slice(-10) : "";
 };
+
+/**
+ * Leitor de CSV de verdade — não `split(",")`.
+ *
+ * A exportação do WhatsApp traz nomes com vírgula, com aspas e até com quebra
+ * de linha DENTRO do campo (há um assim na lista real). Qualquer atalho aqui
+ * desalinha as colunas e o telefone de uma pessoa vira o de outra.
+ */
+function lerCsv(texto) {
+  const linhas = [];
+  let campo = "", linha = [], entreAspas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const caractere = texto[i];
+    if (entreAspas) {
+      if (caractere === '"') {
+        if (texto[i + 1] === '"') { campo += '"'; i++; } else entreAspas = false;
+      } else campo += caractere;
+    } else if (caractere === '"') entreAspas = true;
+    else if (caractere === ",") { linha.push(campo); campo = ""; }
+    else if (caractere === "\n") { linha.push(campo); linhas.push(linha); linha = []; campo = ""; }
+    else if (caractere !== "\r") campo += caractere;
+  }
+  if (campo !== "" || linha.length) { linha.push(campo); linhas.push(linha); }
+  return linhas;
+}
+
+/** Extrai os telefones de um CSV exportado, ache-se a coluna onde estiver. */
+function telefonesDoCsv(texto) {
+  const linhas = lerCsv(texto).filter((l) => l.length > 1);
+  if (!linhas.length) return [];
+  const cabecalho = linhas[0].map((c) => c.trim().toLowerCase());
+  let coluna = cabecalho.findIndex((c) => /phone|telefone|celular|number/.test(c));
+  if (coluna === -1) {
+    // Sem cabeçalho reconhecível: usa a coluna com mais cara de telefone.
+    const corpo = linhas.slice(1);
+    let melhor = -1, melhorNota = 0;
+    for (let c = 0; c < cabecalho.length; c++) {
+      const nota = corpo.filter((l) => /^\+?[0-9][0-9\s()-]{7,}$/.test((l[c] ?? "").trim())).length;
+      if (nota > melhorNota) { melhorNota = nota; melhor = c; }
+    }
+    if (melhor === -1) return [];
+    coluna = melhor;
+    return corpo.map((l) => l[coluna]);
+  }
+  return linhas.slice(1).map((l) => l[coluna]);
+}
 
 function carregarNumeros() {
   try {
@@ -280,12 +332,37 @@ $("sair").addEventListener("click", sair);
 $("salvar-numeros").addEventListener("click", () => {
   // Quebra só por linha e por vírgula — NUNCA por espaço em branco qualquer,
   // senão "+55 31 97777-6666" vira três pedaços e o número se perde inteiro.
-  const linhas = $("numeros").value.split(/[\n,;]+/).map(chaveTelefone).filter(Boolean);
-  localStorage.setItem(CHAVE_NUMEROS, JSON.stringify([...new Set(linhas)]));
+  guardarNumeros($("numeros").value.split(/[\n,;]+/), "colado");
   $("numeros").value = "";
+});
+function guardarNumeros(brutos, origem) {
+  const chaves = [...new Set(brutos.map(chaveTelefone).filter(Boolean))];
+  localStorage.setItem(CHAVE_NUMEROS, JSON.stringify(chaves));
   carregarNumeros();
   desenhar();
+  const perdidos = brutos.filter((n) => String(n || "").trim() && !chaveTelefone(n)).length;
+  if (perdidos) {
+    // Número curto demais para virar chave (ex.: estrangeiro sem o código do
+    // país). Melhor avisar do que fingir que a lista veio inteira.
+    $("resumo-numeros").textContent += ` · ${perdidos} sem formato reconhecível`;
+  }
+  return { chaves: chaves.length, origem };
+}
+
+$("arquivo-csv").addEventListener("change", async (evento) => {
+  const arquivo = evento.target.files?.[0];
+  if (!arquivo) return;
+  try {
+    const telefones = telefonesDoCsv(await arquivo.text());
+    if (!telefones.length) throw new Error("Nenhuma coluna de telefone encontrada no arquivo");
+    guardarNumeros(telefones, "csv");
+  } catch (falha) {
+    $("resumo-numeros").textContent = falha.message;
+  } finally {
+    evento.target.value = "";
+  }
 });
+
 $("limpar-numeros").addEventListener("click", () => {
   localStorage.removeItem(CHAVE_NUMEROS);
   carregarNumeros();
