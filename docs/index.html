@@ -76,10 +76,11 @@ form.addEventListener('submit', async (evento) => {
     });
     const corpo = await resposta.json().catch(() => ({}));
     if (!resposta.ok) throw new Error(corpo.erro || 'Não foi possível enviar');
+    // O servidor responde igual para inscrição nova e repetida, de propósito:
+    // a diferença seria um oráculo de quem está na lista (enumeração).
     document.getElementById('cartao').innerHTML =
-      '<div class="pronto"><div class="marca">✓</div><h2>' +
-      (corpo.repetido ? 'Você já está na lista' : 'Inscrição recebida') +
-      '</h2><p>Vamos conferir seu cadastro e liberar o acesso. Você receberá um e-mail com o link para baixar o EVOLUMA e entrar.</p></div>';
+      '<div class="pronto"><div class="marca">✓</div><h2>Inscrição recebida</h2>' +
+      '<p>Vamos conferir seu cadastro e liberar o acesso. Você receberá um e-mail com o link para baixar o EVOLUMA e entrar.</p></div>';
   } catch (falha) {
     msg.className = 'msg erro';
     msg.textContent = falha.message;
