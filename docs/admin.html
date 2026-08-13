@@ -36,6 +36,9 @@ button{background:#191f26;border:1px solid #3a424b;border-radius:8px;padding:9px
 button.primary{background:#b8e04a;border-color:#b8e04a;color:#10130a;font-weight:700}
 button:disabled{opacity:.5;cursor:default}
 .erro{margin:10px 0 0;font-size:12px;color:#ff8d80}
+.aviso-envio{margin:10px 0 0;font-size:11px;color:#8b949d;min-height:14px}
+.aviso-envio.ok{color:#b8e04a}
+.aviso-envio.erro{color:#ff8d80;font-weight:600}
 .barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
 .barra input{flex:1;min-width:180px;font-size:14px}
 .contagens{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
@@ -86,6 +89,7 @@ code{background:#0d1116;border:1px solid #232a32;border-radius:5px;padding:1px 4
     </table>
     <p class="vazio oculto" id="vazio">Nenhuma inscrição ainda.</p>
     <p class="erro oculto" id="erro-lista"></p>
+    <p class="aviso-envio" id="aviso-envio"></p>
 
     <details>
       <summary>Cruzar com o grupo do WhatsApp</summary>
@@ -278,6 +282,28 @@ async function decidir(id, status) {
   const alvo = inscritos.find((item) => item.id === id);
   if (alvo) { alvo.status = status; alvo.decided_at = alterado[0].decided_at; }
   desenhar();
+
+  // Aprovar sem avisar deixa o fotógrafo esperando por um e-mail que a tela de
+  // inscrição prometeu. O aviso é parte da aprovação, não um extra — e se ele
+  // falhar, quem aprovou precisa SABER, senão a pessoa fica no limbo.
+  if (status === "aprovado" && alterado[0].email) {
+    $("aviso-envio").textContent = "Enviando aviso…";
+    $("aviso-envio").className = "aviso-envio";
+    try {
+      const envio = await api("/functions/v1/avisar-aprovado", {
+        method: "POST",
+        body: JSON.stringify({ email: alterado[0].email }),
+      });
+      const corpo = await envio.json().catch(() => ({}));
+      if (!envio.ok) throw new Error(corpo.erro || "falha desconhecida");
+      $("aviso-envio").textContent = `Aviso enviado para ${alterado[0].email}`;
+      $("aviso-envio").className = "aviso-envio ok";
+    } catch (falha) {
+      $("aviso-envio").textContent =
+        `APROVADO, MAS SEM AVISO para ${alterado[0].email} — ${falha.message}. Avise a pessoa manualmente.`;
+      $("aviso-envio").className = "aviso-envio erro";
+    }
+  }
 }
 
 function desenhar() {
