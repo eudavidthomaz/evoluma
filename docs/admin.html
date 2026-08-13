@@ -1,0 +1,298 @@
+<!doctype html>
+<!--
+  Painel de acompanhamento do beta — inscritos, aprovação e bloqueio.
+
+  Duas decisões que valem explicação:
+
+  1. Login por SENHA, não por código de e-mail. O painel precisa funcionar
+     ANTES do SMTP estar de pé, senão vira dependência circular: para aprovar
+     alguém eu precisaria de um e-mail que só sai depois de configurado.
+     Os fotógrafos entram por código; o dono entra por senha.
+
+  2. Os números do grupo do WhatsApp ficam SÓ NESTE NAVEGADOR (localStorage).
+     Cruzar a lista não exige mandar 162 telefones para o servidor, então não
+     mandamos. O painel marca quem está no grupo e quem apareceu de fora.
+
+  A segurança real não está aqui: está nas políticas RLS do banco. Esta página
+  usa a chave publicável, e sem um token de admin o banco não devolve nada.
+-->
+<html lang="pt-BR"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>EVOLUMA — painel do beta</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#0b0e13;color:#dbe3ea;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+.wrap{max-width:960px;margin:0 auto}
+h1{font-size:17px;margin:0 0 2px}
+.sub{font-size:12px;color:#8b949d;margin:0 0 18px}
+.painel{background:#12161c;border:1px solid #2c333b;border-radius:14px;padding:18px}
+label span{display:block;font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#8b949d;margin-bottom:6px}
+input,textarea{width:100%;background:#0d1116;border:1px solid #2c333b;border-radius:9px;padding:11px;color:#e8eef4;font-size:16px;font-family:inherit}
+input:focus,textarea:focus{outline:none;border-color:#b8e04a}
+label{display:block;margin-bottom:12px}
+button{background:#191f26;border:1px solid #3a424b;border-radius:8px;padding:9px 14px;color:#c7cfd6;font-size:12px;font-family:inherit;cursor:pointer}
+button.primary{background:#b8e04a;border-color:#b8e04a;color:#10130a;font-weight:700}
+button:disabled{opacity:.5;cursor:default}
+.erro{margin:10px 0 0;font-size:12px;color:#ff8d80}
+.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.barra input{flex:1;min-width:180px;font-size:14px}
+.contagens{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.contagens button{font-size:11px}
+.contagens button.ativo{border-color:#b8e04a;color:#e9f0d8}
+.contagens i{font-style:normal;color:#8b949d;margin-left:5px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:#8b949d;padding:6px 8px;border-bottom:1px solid #232a32}
+td{padding:8px;border-bottom:1px solid #171d24;vertical-align:middle}
+tr.bloqueado{opacity:.45}
+.chip{font-size:9px;border-radius:4px;padding:2px 6px;border:1px solid #39414a;color:#aab3bb;white-space:nowrap}
+.chip.aprovado{color:#b8e04a;border-color:#3c4a19}
+.chip.pendente{color:#f2c94c;border-color:#5d5023}
+.chip.bloqueado{color:#ff8d80;border-color:#5d302b}
+.chip.grupo{color:#8ecbff;border-color:#2c4a63}
+.chip.fora{color:#ff8d80;border-color:#5d302b}
+.acoes{display:flex;gap:4px;justify-content:flex-end}
+.acoes button{padding:5px 9px;font-size:11px}
+.vazio{padding:24px;text-align:center;color:#68727b;font-size:12px}
+details{margin-top:16px;border-top:1px solid #232a32;padding-top:14px}
+summary{font-size:12px;color:#8b949d;cursor:pointer}
+details p{font-size:11px;color:#68727b;line-height:1.6}
+code{background:#0d1116;border:1px solid #232a32;border-radius:5px;padding:1px 4px;font-size:11px}
+.oculto{display:none}
+</style></head>
+<body>
+<div class="wrap">
+  <h1>EVOLUMA — painel do beta</h1>
+  <p class="sub">Inscritos, aprovação e cruzamento com o grupo.</p>
+
+  <div class="painel" id="tela-login">
+    <label><span>E-mail de administrador</span><input id="email" type="email" autocomplete="username" autocapitalize="off"></label>
+    <label><span>Senha</span><input id="senha" type="password" autocomplete="current-password"></label>
+    <button class="primary" id="entrar">Entrar</button>
+    <p class="erro oculto" id="erro-login"></p>
+  </div>
+
+  <div class="painel oculto" id="tela-lista">
+    <div class="barra">
+      <input id="busca" placeholder="Buscar por nome, e-mail ou telefone…">
+      <button id="recarregar">↻</button>
+      <button id="sair">Sair</button>
+    </div>
+    <div class="contagens" id="contagens"></div>
+    <table>
+      <thead><tr><th>Fotógrafo</th><th>Contato</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="linhas"></tbody>
+    </table>
+    <p class="vazio oculto" id="vazio">Nenhuma inscrição ainda.</p>
+    <p class="erro oculto" id="erro-lista"></p>
+
+    <details>
+      <summary>Cruzar com o grupo do WhatsApp</summary>
+      <p>Cole aqui os números do grupo — um por linha, com ou sem formatação. Eles ficam
+      <strong>só neste navegador</strong>, nunca vão para o servidor. Quem se inscrever com um número
+      fora dessa lista aparece marcado como <span class="chip fora">fora do grupo</span>.</p>
+      <textarea id="numeros" rows="4" placeholder="+55 31 97777-6666&#10;5511988887777"></textarea>
+      <div class="barra" style="margin-top:10px">
+        <button id="salvar-numeros">Salvar lista</button>
+        <button id="limpar-numeros">Apagar lista</button>
+        <span id="resumo-numeros" class="sub" style="margin:0"></span>
+      </div>
+    </details>
+  </div>
+</div>
+
+<script>
+const URL_BASE = "https://uuixcktluyyxzfuwqmim.supabase.co";
+const CHAVE = "sb_publishable_du80-LyVPvfJPc_4L6Rcjg_jSPVevMf";
+const CHAVE_NUMEROS = "evoluma.grupo.numeros.v1";
+
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem("evoluma.admin.token") || "";
+let inscritos = [];
+let filtro = "todos";
+let numerosGrupo = new Set();
+
+/**
+ * Reduz qualquer forma de escrever um telefone brasileiro à mesma chave:
+ * tira o 55 do país e o 9 extra que os celulares ganharam. Sem isso,
+ * "+55 31 97777-6666" (como o WhatsApp mostra) e "(31) 7777-6666" (como muita
+ * gente ainda digita) seriam duas pessoas diferentes.
+ */
+const chaveTelefone = (valor) => {
+  let digitos = String(valor || "").replace(/[^0-9]/g, "");
+  if (digitos.length > 11 && digitos.startsWith("55")) digitos = digitos.slice(2);
+  if (digitos.length === 11 && digitos[2] === "9") digitos = digitos.slice(0, 2) + digitos.slice(3);
+  return digitos.length >= 10 ? digitos.slice(-10) : "";
+};
+
+function carregarNumeros() {
+  try {
+    const bruto = JSON.parse(localStorage.getItem(CHAVE_NUMEROS) || "[]");
+    numerosGrupo = new Set(bruto.map(chaveTelefone).filter(Boolean));
+  } catch { numerosGrupo = new Set(); }
+  $("resumo-numeros").textContent = numerosGrupo.size
+    ? numerosGrupo.size + " número(s) do grupo neste navegador"
+    : "nenhuma lista salva — o cruzamento fica desligado";
+}
+
+async function api(caminho, init = {}) {
+  const resposta = await fetch(URL_BASE + caminho, {
+    ...init,
+    headers: {
+      apikey: CHAVE,
+      authorization: "Bearer " + token,
+      "content-type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+  if (resposta.status === 401) { sair(); throw new Error("Sessão expirada — entre de novo"); }
+  return resposta;
+}
+
+function sair() {
+  token = "";
+  sessionStorage.removeItem("evoluma.admin.token");
+  $("tela-lista").classList.add("oculto");
+  $("tela-login").classList.remove("oculto");
+}
+
+async function entrar() {
+  const erro = $("erro-login");
+  erro.classList.add("oculto");
+  $("entrar").disabled = true;
+  try {
+    const resposta = await fetch(URL_BASE + "/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: { apikey: CHAVE, "content-type": "application/json" },
+      body: JSON.stringify({ email: $("email").value.trim().toLowerCase(), password: $("senha").value }),
+    });
+    const corpo = await resposta.json().catch(() => ({}));
+    if (!resposta.ok || !corpo.access_token)
+      throw new Error(corpo.error_description || corpo.msg || "E-mail ou senha incorretos");
+    token = corpo.access_token;
+    sessionStorage.setItem("evoluma.admin.token", token);
+    $("senha").value = "";
+    await abrirLista();
+  } catch (falha) {
+    erro.textContent = falha.message;
+    erro.classList.remove("oculto");
+  } finally {
+    $("entrar").disabled = false;
+  }
+}
+
+async function abrirLista() {
+  $("tela-login").classList.add("oculto");
+  $("tela-lista").classList.remove("oculto");
+  await recarregar();
+}
+
+async function recarregar() {
+  const erro = $("erro-lista");
+  erro.classList.add("oculto");
+  try {
+    const resposta = await api("/rest/v1/beta_requests?select=*&order=created_at.desc");
+    if (!resposta.ok) throw new Error("Não foi possível ler o cadastro");
+    inscritos = await resposta.json();
+    // Lista vazia com login válido = o e-mail não está em beta_admins. Sem
+    // essa mensagem, o painel pareceria quebrado justamente para quem tem
+    // permissão de menos.
+    if (!inscritos.length) {
+      const teste = await api("/rest/v1/beta_admins?select=email&limit=1");
+      if (teste.ok && !(await teste.json()).length) {
+        throw new Error("Esta conta não é administradora do beta.");
+      }
+    }
+    desenhar();
+  } catch (falha) {
+    erro.textContent = falha.message;
+    erro.classList.remove("oculto");
+  }
+}
+
+async function decidir(id, status) {
+  const resposta = await api("/rest/v1/beta_requests?id=eq." + id, {
+    method: "PATCH",
+    headers: { prefer: "return=representation" },
+    body: JSON.stringify({ status, decided_at: new Date().toISOString() }),
+  });
+  const alterado = resposta.ok ? await resposta.json() : [];
+  if (!alterado.length) {
+    $("erro-lista").textContent = "A alteração não foi aceita pelo banco.";
+    $("erro-lista").classList.remove("oculto");
+    return;
+  }
+  const alvo = inscritos.find((item) => item.id === id);
+  if (alvo) { alvo.status = status; alvo.decided_at = alterado[0].decided_at; }
+  desenhar();
+}
+
+function desenhar() {
+  const termo = $("busca").value.trim().toLowerCase();
+  const contagem = { todos: inscritos.length, pendente: 0, aprovado: 0, bloqueado: 0 };
+  for (const item of inscritos) contagem[item.status] = (contagem[item.status] || 0) + 1;
+
+  $("contagens").innerHTML = [
+    ["todos", "Todos"], ["pendente", "Pendentes"], ["aprovado", "Aprovados"], ["bloqueado", "Bloqueados"],
+  ].map(([id, rotulo]) =>
+    `<button data-filtro="${id}" class="${filtro === id ? "ativo" : ""}">${rotulo}<i>${contagem[id] || 0}</i></button>`
+  ).join("");
+
+  const visiveis = inscritos.filter((item) => {
+    if (filtro !== "todos" && item.status !== filtro) return false;
+    if (!termo) return true;
+    return `${item.full_name} ${item.email} ${item.phone}`.toLowerCase().includes(termo);
+  });
+
+  $("vazio").classList.toggle("oculto", visiveis.length > 0);
+  $("linhas").innerHTML = visiveis.map((item) => {
+    const noGrupo = numerosGrupo.size
+      ? (numerosGrupo.has(chaveTelefone(item.phone))
+          ? '<span class="chip grupo">no grupo</span>'
+          : '<span class="chip fora">fora do grupo</span>')
+      : "";
+    const escapar = (texto) => String(texto ?? "").replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    return `<tr class="${item.status === "bloqueado" ? "bloqueado" : ""}">
+      <td><strong>${escapar(item.full_name)}</strong><br><span class="sub">${escapar(item.camera || "câmera não informada")}</span></td>
+      <td>${escapar(item.email)}<br><span class="sub">${escapar(item.phone)}</span></td>
+      <td><span class="chip ${item.status}">${item.status}</span> ${noGrupo}</td>
+      <td class="acoes">
+        ${item.status !== "aprovado" ? `<button data-aprovar="${item.id}">Aprovar</button>` : ""}
+        ${item.status !== "bloqueado" ? `<button data-bloquear="${item.id}">Bloquear</button>` : ""}
+      </td></tr>`;
+  }).join("");
+}
+
+document.addEventListener("click", (evento) => {
+  const alvo = evento.target.closest("button");
+  if (!alvo) return;
+  if (alvo.dataset.filtro) { filtro = alvo.dataset.filtro; desenhar(); }
+  if (alvo.dataset.aprovar) decidir(alvo.dataset.aprovar, "aprovado");
+  if (alvo.dataset.bloquear) decidir(alvo.dataset.bloquear, "bloqueado");
+});
+$("entrar").addEventListener("click", entrar);
+$("senha").addEventListener("keydown", (e) => e.key === "Enter" && entrar());
+$("busca").addEventListener("input", desenhar);
+$("recarregar").addEventListener("click", recarregar);
+$("sair").addEventListener("click", sair);
+$("salvar-numeros").addEventListener("click", () => {
+  // Quebra só por linha e por vírgula — NUNCA por espaço em branco qualquer,
+  // senão "+55 31 97777-6666" vira três pedaços e o número se perde inteiro.
+  const linhas = $("numeros").value.split(/[\n,;]+/).map(chaveTelefone).filter(Boolean);
+  localStorage.setItem(CHAVE_NUMEROS, JSON.stringify([...new Set(linhas)]));
+  $("numeros").value = "";
+  carregarNumeros();
+  desenhar();
+});
+$("limpar-numeros").addEventListener("click", () => {
+  localStorage.removeItem(CHAVE_NUMEROS);
+  carregarNumeros();
+  desenhar();
+});
+
+carregarNumeros();
+if (token) abrirLista();
+</script>
+</body></html>
