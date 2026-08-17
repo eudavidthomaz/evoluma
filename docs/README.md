@@ -29,14 +29,21 @@ alguma, porque quem barra é a política RLS, não a página.
 
 ## Publicar uma versão
 
-Cada release leva quatro arquivos:
+Cada release leva arquivos de download — nunca código:
 
 | Arquivo | Para quê |
 |---|---|
-| `EVOLUMA Studio_<versão>_aarch64.dmg` | primeira instalação |
-| `EVOLUMA Studio.app.tar.gz` | o pacote que o atualizador baixa |
-| `EVOLUMA Studio.app.tar.gz.sig` | assinatura do pacote |
+| `EVOLUMA.Studio_<versão>_aarch64.dmg` | primeira instalação no Mac |
+| `EVOLUMA.Studio.app.tar.gz` | o pacote que o atualizador baixa no Mac |
+| `EVOLUMA.Studio.app.tar.gz.sig` | assinatura do pacote do Mac |
+| `EVOLUMA.Studio_<versão>_x64-setup.exe` | primeira instalação no Windows |
+| `EVOLUMA.Studio_<versão>_x64-setup.nsis.zip` (+ `.sig`) | o que o atualizador baixa no Windows |
 | `latest.json` | manifesto que o aplicativo consulta |
+
+O manifesto passou a ter mais de uma plataforma. Isso importa mais do que
+parece: um aplicativo de Windows que consulta um `latest.json` sem a chave
+`windows-x86_64` **não acha erro** — ele entende "não há atualização" e fica
+parado para sempre, calado.
 
 O aplicativo checa `releases/latest/download/latest.json` no arranque e só
 instala um pacote cuja assinatura casa com a chave pública embutida no binário.
