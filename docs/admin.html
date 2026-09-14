@@ -122,6 +122,8 @@ let token = sessionStorage.getItem("evoluma.admin.token") || "";
 let inscritos = [];
 let filtro = "todos";
 let numerosGrupo = new Set();
+let avisos = new Map();
+const emAndamento = new Set();
 
 /**
  * Reduz qualquer forma de escrever um telefone brasileiro à mesma chave:
@@ -250,7 +252,9 @@ async function recarregar() {
   try {
     const resposta = await api("/rest/v1/beta_requests?select=*&order=created_at.desc");
     if (!resposta.ok) throw new Error("Não foi possível ler o cadastro");
-    inscritos = await resposta.json();
+    const recebidos = await resposta.json();
+    if (!Array.isArray(recebidos)) throw new Error("Resposta de cadastro inválida.");
+    inscritos = recebidos;
     // Lista vazia com login válido = o e-mail não está em beta_admins. Sem
     // essa mensagem, o painel pareceria quebrado justamente para quem tem
     // permissão de menos.
@@ -260,14 +264,33 @@ async function recarregar() {
         throw new Error("Esta conta não é administradora do beta.");
       }
     }
+    avisos = new Map();
+    const aprovados = inscritos.filter(item => item.status === "aprovado").map(item => item.id);
+    // Ler o registro não envia e-mail. Após reload, o estado vem do banco,
+    // nunca de uma mensagem de sucesso guardada somente neste navegador.
+    for (let inicio = 0; inicio < aprovados.length; inicio += 500) {
+      const respostaAvisos = await api("/functions/v1/avisar-aprovado", {
+        method: "POST", body: JSON.stringify({ action: "status", request_ids: aprovados.slice(inicio, inicio + 500) }),
+      });
+      if (!respostaAvisos.ok) throw new Error("Não foi possível conferir os avisos. Recarregue antes de enviar.");
+      const corpo = await respostaAvisos.json();
+      if (!Array.isArray(corpo.notices)) throw new Error("Registro de avisos inválido.");
+      for (const aviso of corpo.notices) avisos.set(aviso.request_id, aviso);
+    }
     desenhar();
   } catch (falha) {
+    avisos = new Map();
+    desenhar();
     erro.textContent = falha.message;
     erro.classList.remove("oculto");
   }
 }
 
 async function decidir(id, status) {
+  if (emAndamento.has(id)) return;
+  emAndamento.add(id);
+  desenhar();
+  try {
   const resposta = await api("/rest/v1/beta_requests?id=eq." + id, {
     method: "PATCH",
     headers: { prefer: "return=representation" },
@@ -279,30 +302,52 @@ async function decidir(id, status) {
     $("erro-lista").classList.remove("oculto");
     return;
   }
-  const alvo = inscritos.find((item) => item.id === id);
-  if (alvo) { alvo.status = status; alvo.decided_at = alterado[0].decided_at; }
-  desenhar();
+  $("aviso-envio").textContent = status === "aprovado"
+    ? "Aprovação salva. Use Enviar aviso para comunicar esta pessoa."
+    : "Bloqueio salvo. Novas tentativas de aviso foram desabilitadas.";
+  $("aviso-envio").className = "aviso-envio";
+  await recarregar();
+  } catch (falha) {
+    $("erro-lista").textContent = falha.message;
+    $("erro-lista").classList.remove("oculto");
+  } finally {
+    emAndamento.delete(id);
+    desenhar();
+  }
+}
 
-  // Aprovar sem avisar deixa o fotógrafo esperando por um e-mail que a tela de
-  // inscrição prometeu. O aviso é parte da aprovação, não um extra — e se ele
-  // falhar, quem aprovou precisa SABER, senão a pessoa fica no limbo.
-  if (status === "aprovado" && alterado[0].email) {
-    $("aviso-envio").textContent = "Enviando aviso…";
-    $("aviso-envio").className = "aviso-envio";
-    try {
-      const envio = await api("/functions/v1/avisar-aprovado", {
-        method: "POST",
-        body: JSON.stringify({ email: alterado[0].email }),
-      });
-      const corpo = await envio.json().catch(() => ({}));
-      if (!envio.ok) throw new Error(corpo.erro || "falha desconhecida");
-      $("aviso-envio").textContent = `Aviso enviado para ${alterado[0].email}`;
-      $("aviso-envio").className = "aviso-envio ok";
-    } catch (falha) {
-      $("aviso-envio").textContent =
-        `APROVADO, MAS SEM AVISO para ${alterado[0].email} — ${falha.message}. Avise a pessoa manualmente.`;
-      $("aviso-envio").className = "aviso-envio erro";
-    }
+function estadoAviso(item) {
+  if (item.status !== "aprovado") return { texto: "", acao: "" };
+  const aviso = avisos.get(item.id);
+  if (!aviso) return { texto: "Aviso não conferido — recarregue", acao: "" };
+  if (aviso.status === "sent") return { texto: "Aviso aceito pelo provedor", acao: "" };
+  if (aviso.error_code === "legacy_unknown") return { texto: "Envio antigo sem registro — conferir no provedor", acao: "" };
+  if (!aviso.retry_allowed) return { texto: aviso.status === "sending" ? "Tentativa em andamento — recarregue" : "Envio incerto — conferir no provedor", acao: "" };
+  if (aviso.status === "pending") return { texto: "Aviso ainda não enviado", acao: "Enviar aviso" };
+  const ate = aviso.retry_until ? " até " + new Date(aviso.retry_until).toLocaleString("pt-BR") : "";
+  return { texto: (aviso.status === "failed" ? "Envio recusado" : "Envio sem confirmação") + ate, acao: "Retomar aviso" };
+}
+
+async function enviarAviso(id) {
+  const alvo = inscritos.find(item => item.id === id);
+  if (!alvo || !estadoAviso(alvo).acao || emAndamento.has(id)) return;
+  emAndamento.add(id);
+  desenhar();
+  $("aviso-envio").textContent = "Registrando tentativa de aviso…";
+  $("aviso-envio").className = "aviso-envio";
+  try {
+    const resposta = await api("/functions/v1/avisar-aprovado", { method: "POST", body: JSON.stringify({ action: "send", request_id: id }) });
+    const corpo = await resposta.json().catch(() => ({}));
+    if (!resposta.ok || corpo.status !== "sent") throw new Error(corpo.erro || "O envio não foi confirmado. Recarregue antes de retomar.");
+    $("aviso-envio").textContent = corpo.already_sent ? "Este aviso já havia sido aceito pelo provedor; nada foi reenviado." : "Aviso aceito pelo provedor. Isso não confirma entrega na caixa de entrada.";
+    $("aviso-envio").className = "aviso-envio ok";
+  } catch (falha) {
+    $("aviso-envio").textContent = falha.message;
+    $("aviso-envio").className = "aviso-envio erro";
+  } finally {
+    await recarregar();
+    emAndamento.delete(id);
+    desenhar();
   }
 }
 
@@ -332,13 +377,16 @@ function desenhar() {
       : "";
     const escapar = (texto) => String(texto ?? "").replace(/[&<>"]/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const aviso = estadoAviso(item);
+    const desabilitado = emAndamento.has(item.id) ? "disabled" : "";
     return `<tr class="${item.status === "bloqueado" ? "bloqueado" : ""}">
       <td><strong>${escapar(item.full_name)}</strong><br><span class="sub">${escapar(item.camera || "câmera não informada")}</span></td>
       <td>${escapar(item.email)}<br><span class="sub">${escapar(item.phone)}</span></td>
-      <td><span class="chip ${item.status}">${item.status}</span> ${noGrupo}</td>
+      <td><span class="chip ${escapar(item.status)}">${escapar(item.status)}</span> ${noGrupo}<br><span class="sub">${escapar(aviso.texto)}</span></td>
       <td class="acoes">
-        ${item.status !== "aprovado" ? `<button data-aprovar="${item.id}">Aprovar</button>` : ""}
-        ${item.status !== "bloqueado" ? `<button data-bloquear="${item.id}">Bloquear</button>` : ""}
+        ${item.status !== "aprovado" ? `<button ${desabilitado} data-aprovar="${escapar(item.id)}">Aprovar</button>` : ""}
+        ${item.status !== "bloqueado" ? `<button ${desabilitado} data-bloquear="${escapar(item.id)}">Bloquear</button>` : ""}
+        ${aviso.acao ? `<button ${desabilitado} data-aviso="${escapar(item.id)}">${aviso.acao}</button>` : ""}
       </td></tr>`;
   }).join("");
 }
@@ -349,6 +397,7 @@ document.addEventListener("click", (evento) => {
   if (alvo.dataset.filtro) { filtro = alvo.dataset.filtro; desenhar(); }
   if (alvo.dataset.aprovar) decidir(alvo.dataset.aprovar, "aprovado");
   if (alvo.dataset.bloquear) decidir(alvo.dataset.bloquear, "bloqueado");
+  if (alvo.dataset.aviso) enviarAviso(alvo.dataset.aviso);
 });
 $("entrar").addEventListener("click", entrar);
 $("senha").addEventListener("keydown", (e) => e.key === "Enter" && entrar());
