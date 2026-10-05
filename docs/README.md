@@ -36,8 +36,7 @@ Cada release leva arquivos de download — nunca código:
 | `EVOLUMA.Studio_<versão>_aarch64.dmg` | primeira instalação no Mac |
 | `EVOLUMA.Studio.app.tar.gz` | o pacote que o atualizador baixa no Mac |
 | `EVOLUMA.Studio.app.tar.gz.sig` | assinatura do pacote do Mac |
-| `EVOLUMA.Studio_<versão>_x64-setup.exe` | primeira instalação no Windows |
-| `EVOLUMA.Studio_<versão>_x64-setup.nsis.zip` (+ `.sig`) | o que o atualizador baixa no Windows |
+| `EVOLUMA.Studio_<versão>_x64-setup.exe` | primeira instalação no Windows e também o que o atualizador baixa; a assinatura vai dentro do `latest.json` |
 | `latest.json` | manifesto que o aplicativo consulta |
 
 O manifesto passou a ter mais de uma plataforma. Isso importa mais do que
